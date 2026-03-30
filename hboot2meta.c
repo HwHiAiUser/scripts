@@ -1,9 +1,11 @@
+#define _XOPEN_SOURCE 700
 #define _POSIX_C_SOURCE 200809L
 
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -626,6 +628,137 @@ static int parse_integer_arg(const char *text, uint64_t *value_out)
     return 0;
 }
 
+static bool parse_cmdline_root(char *root_out, size_t root_out_size)
+{
+    FILE *fp;
+    char buf[8192];
+    char *token;
+    char *saveptr = NULL;
+
+    if (root_out_size == 0) {
+        return false;
+    }
+
+    fp = fopen("/proc/cmdline", "r");
+    if (fp == NULL) {
+        return false;
+    }
+    if (fgets(buf, sizeof(buf), fp) == NULL) {
+        fclose(fp);
+        return false;
+    }
+    fclose(fp);
+
+    token = strtok_r(buf, " \t\r\n", &saveptr);
+    while (token != NULL) {
+        if (strncmp(token, "root=", 5) == 0) {
+            snprintf(root_out, root_out_size, "%s", token + 5);
+            return true;
+        }
+        token = strtok_r(NULL, " \t\r\n", &saveptr);
+    }
+    return false;
+}
+
+static void partition_path_to_disk_path(char *path)
+{
+    char *base = strrchr(path, '/');
+    size_t len;
+
+    if (base == NULL) {
+        base = path;
+    } else {
+        ++base;
+    }
+
+    len = strlen(base);
+    if (len == 0) {
+        return;
+    }
+
+    if (strncmp(base, "mmcblk", 6) == 0 || strncmp(base, "nvme", 4) == 0) {
+        size_t end = len;
+
+        while (end > 0 && isdigit((unsigned char)base[end - 1])) {
+            --end;
+        }
+        if (end > 0 && end < len && base[end - 1] == 'p') {
+            base[end - 1] = '\0';
+        }
+        return;
+    }
+
+    while (len > 0 && isdigit((unsigned char)base[len - 1])) {
+        --len;
+    }
+    if (len > 0 && len < strlen(base)) {
+        base[len] = '\0';
+    }
+}
+
+static bool resolve_root_spec_to_disk(const char *root_spec, char *disk_out, size_t disk_out_size)
+{
+    char resolved[PATH_MAX];
+    char link_path[PATH_MAX];
+
+    if (root_spec == NULL || disk_out_size == 0) {
+        return false;
+    }
+
+    if (strncmp(root_spec, "/dev/", 5) == 0) {
+        snprintf(disk_out, disk_out_size, "%s", root_spec);
+        partition_path_to_disk_path(disk_out);
+        return access(disk_out, F_OK) == 0;
+    }
+
+    if (strncmp(root_spec, "PARTUUID=", 9) == 0) {
+        if (strlen(root_spec + 9) > sizeof(link_path) - strlen("/dev/disk/by-partuuid/") - 1) {
+            return false;
+        }
+        snprintf(link_path, sizeof(link_path), "/dev/disk/by-partuuid/%s", root_spec + 9);
+    } else if (strncmp(root_spec, "UUID=", 5) == 0) {
+        if (strlen(root_spec + 5) > sizeof(link_path) - strlen("/dev/disk/by-uuid/") - 1) {
+            return false;
+        }
+        snprintf(link_path, sizeof(link_path), "/dev/disk/by-uuid/%s", root_spec + 5);
+    } else {
+        return false;
+    }
+
+    if (realpath(link_path, resolved) == NULL) {
+        return false;
+    }
+
+    snprintf(disk_out, disk_out_size, "%s", resolved);
+    partition_path_to_disk_path(disk_out);
+    return access(disk_out, F_OK) == 0;
+}
+
+static const char *guess_default_meta_path(void)
+{
+    static char guessed_path[PATH_MAX];
+    static const char *const fallback_candidates[] = {
+        "/dev/mmcblk1",
+        "/dev/mmcblk0",
+        "/dev/sda",
+    };
+    char root_spec[PATH_MAX];
+    size_t i;
+
+    guessed_path[0] = '\0';
+    if (parse_cmdline_root(root_spec, sizeof(root_spec)) &&
+        resolve_root_spec_to_disk(root_spec, guessed_path, sizeof(guessed_path))) {
+        return guessed_path;
+    }
+
+    for (i = 0; i < ARRAY_SIZE(fallback_candidates); ++i) {
+        if (access(fallback_candidates[i], F_OK) == 0) {
+            return fallback_candidates[i];
+        }
+    }
+    return NULL;
+}
+
 static int shell_quote_single(const char *text, char **quoted_out)
 {
     size_t len = strlen(text);
@@ -1039,10 +1172,10 @@ static void usage(FILE *stream)
 {
     fprintf(stream,
             "Usage:\n"
-            "  hboot2meta dump [--layout auto|whole-disk|raw-boot] [--base-offset N] <path>\n"
-            "  hboot2meta get  [--layout auto|whole-disk|raw-boot] [--base-offset N] <path> <field>\n"
-            "  hboot2meta set  [--layout auto|whole-disk|raw-boot] [--base-offset N] <path> <field> <value>\n"
-            "  hboot2meta flash [-y] [--layout auto|whole-disk|raw-boot] [--base-offset N] <path> <image-target> <image-file>\n"
+            "  hboot2meta dump [--layout auto|whole-disk|raw-boot] [--base-offset N] [path]\n"
+            "  hboot2meta get  [--layout auto|whole-disk|raw-boot] [--base-offset N] [path] <field>\n"
+            "  hboot2meta set  [--layout auto|whole-disk|raw-boot] [--base-offset N] [path] <field> <value>\n"
+            "  hboot2meta flash [-y] [--layout auto|whole-disk|raw-boot] [--base-offset N] [path] <image-target> <image-file>\n"
             "\n"
             "Field path examples:\n"
             "  part_info.main.partition_count\n"
@@ -1057,6 +1190,7 @@ static void usage(FILE *stream)
             "  recovery.main.image[3]\n"
             "\n"
             "Notes:\n"
+            "  when path is omitted, hboot2meta defaults to the current boot disk inferred from /proc/cmdline.\n"
             "  flash asks for confirmation before writing; use -y to skip the prompt.\n"
             "  auto probes both whole-disk and raw-boot interpretations.\n"
             "  whole-disk reads metadata at absolute offsets 0x100000/0x120000/...\n"
@@ -1095,7 +1229,7 @@ static int parse_layout_mode(const char *mode, enum layout_mode_kind *layout_mod
 int main(int argc, char **argv)
 {
     enum command_kind cmd;
-    const char *path;
+    const char *path = NULL;
     const char *field = NULL;
     const char *value = NULL;
     const char *image_file = NULL;
@@ -1109,7 +1243,7 @@ int main(int argc, char **argv)
     struct layout_image layout;
     int argi = 1;
 
-    if (argc < 3) {
+    if (argc < 2) {
         usage(stderr);
         return 1;
     }
@@ -1160,22 +1294,44 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    if ((cmd == CMD_DUMP && argc - argi != 1) ||
-        (cmd == CMD_GET && argc - argi != 2) ||
-        (cmd == CMD_SET && argc - argi != 3) ||
-        (cmd == CMD_FLASH && argc - argi != 3)) {
+    if ((cmd == CMD_DUMP && (argc - argi > 1)) ||
+        (cmd == CMD_GET && ((argc - argi) < 1 || (argc - argi) > 2)) ||
+        (cmd == CMD_SET && ((argc - argi) < 2 || (argc - argi) > 3)) ||
+        (cmd == CMD_FLASH && ((argc - argi) < 2 || (argc - argi) > 3))) {
         usage(stderr);
         return 1;
     }
 
-    path = argv[argi++];
-    if (cmd != CMD_DUMP) {
+    if (cmd == CMD_DUMP) {
+        if (argc - argi == 1) {
+            path = argv[argi++];
+        }
+    } else if (cmd == CMD_GET) {
+        if (argc - argi == 2) {
+            path = argv[argi++];
+        }
         field = argv[argi++];
-    }
-    if (cmd == CMD_SET) {
+    } else if (cmd == CMD_SET) {
+        if (argc - argi == 3) {
+            path = argv[argi++];
+        }
+        field = argv[argi++];
         value = argv[argi++];
     } else if (cmd == CMD_FLASH) {
+        if (argc - argi == 3) {
+            path = argv[argi++];
+        }
+        field = argv[argi++];
         image_file = argv[argi++];
+    }
+
+    if (path == NULL) {
+        path = guess_default_meta_path();
+        if (path == NULL) {
+            fprintf(stderr, "failed to determine current boot disk; please specify path explicitly\n");
+            return 1;
+        }
+        fprintf(stderr, "defaulting path to current boot disk: %s\n", path);
     }
 
     open_flags = (cmd == CMD_SET || cmd == CMD_FLASH) ? O_RDWR : O_RDONLY;

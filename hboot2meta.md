@@ -7,6 +7,8 @@
 - 整块磁盘设备，例如 `/dev/mmcblk1`
 - 裁剪出来的 raw boot 区镜像，例如只包含 `0x100000 ~ 0x121000` 一段的 `boot_region.bin`
 
+如果命令里没有显式给出 `<path>`，`hboot2meta` 会优先根据 `/proc/cmdline` 里的 `root=` 参数推断当前启动磁盘；如果推断失败，再回退到常见设备名探测。
+
 这份文档做两件事：
 
 - 说明 `hboot2meta` 的命令行用法
@@ -90,6 +92,7 @@
 
 ```bash
 ./hboot2meta dump --layout auto /dev/mmcblk1
+./hboot2meta dump
 ```
 
 ## 4. 命令行用法
@@ -99,12 +102,13 @@
 打印所有元数据块。
 
 ```bash
-./hboot2meta dump [--layout auto|whole-disk|raw-boot] [--base-offset N] <path>
+./hboot2meta dump [--layout auto|whole-disk|raw-boot] [--base-offset N] [path]
 ```
 
 示例：
 
 ```bash
+./hboot2meta dump
 ./hboot2meta dump /dev/mmcblk1
 ./hboot2meta dump --layout whole-disk disk.img
 ./hboot2meta dump --layout raw-boot boot_region.bin
@@ -115,12 +119,13 @@
 读取单个字段。
 
 ```bash
-./hboot2meta get [--layout auto|whole-disk|raw-boot] [--base-offset N] <path> <field>
+./hboot2meta get [--layout auto|whole-disk|raw-boot] [--base-offset N] [path] <field>
 ```
 
 示例：
 
 ```bash
+./hboot2meta get part_info.main.partition_count
 ./hboot2meta get /dev/mmcblk1 part_info.main.partition_count
 ./hboot2meta get /dev/mmcblk1 part_ctrl.main.upgrade[0].upgrade_status
 ./hboot2meta get /dev/mmcblk1 boot.main.image[0].offset
@@ -131,12 +136,13 @@
 修改单个字段，并只回写对应 metadata block。
 
 ```bash
-./hboot2meta set [--layout auto|whole-disk|raw-boot] [--base-offset N] <path> <field> <value>
+./hboot2meta set [--layout auto|whole-disk|raw-boot] [--base-offset N] [path] <field> <value>
 ```
 
 示例：
 
 ```bash
+./hboot2meta set boot.main.image[1].offset 0x3800000
 ./hboot2meta set /dev/mmcblk1 boot.main.partition_name PARTUUID=xxxx
 ./hboot2meta set /dev/mmcblk1 boot.main.image[1].offset 0x3800000
 ./hboot2meta set /dev/mmcblk1 part_ctrl.main.force_recovery_flag 0x55AA55AA
@@ -147,12 +153,13 @@
 把一个实际镜像文件写入某个 `boot.*.image[i]` 或 `recovery.*.image[i]` 描述的盘上区域。
 
 ```bash
-./hboot2meta flash [-y] [--layout auto|whole-disk|raw-boot] [--base-offset N] <path> <image-target> <image-file>
+./hboot2meta flash [-y] [--layout auto|whole-disk|raw-boot] [--base-offset N] [path] <image-target> <image-file>
 ```
 
 示例：
 
 ```bash
+./hboot2meta flash boot.main.image[0] Image
 ./hboot2meta flash /dev/mmcblk1 boot.main.image[0] Image
 ./hboot2meta flash -y /dev/mmcblk1 boot.main.image[0] Image
 ./hboot2meta flash /dev/mmcblk1 boot.back.image[1] dt.img
