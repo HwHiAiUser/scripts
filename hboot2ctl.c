@@ -426,6 +426,56 @@ static const char *hsm_ready_state_name(uint32_t value)
     return "waiting";
 }
 
+static const char *run_img_medium_name(uint32_t value)
+{
+    if ((value & 0x80U) != 0) {
+        return "ssd";
+    }
+    if ((value & 0x20U) != 0) {
+        return "emmc";
+    }
+    return "unknown-medium";
+}
+
+static const char *run_img_slot_name(uint32_t value)
+{
+    return (value & 0x1FU) == 0 ? "main" : "back";
+}
+
+static const char *reset_src_state_name(uint32_t value)
+{
+    return (value & 0xFFU) == 0 ? "cold-boot-like" : "non-cold-reset";
+}
+
+static const char *platform_mode_name(uint32_t value)
+{
+    switch (value & 0x3U) {
+    case 0x0U:
+        return "dc";
+    case 0x2U:
+        return "mdc";
+    default:
+        return "other";
+    }
+}
+
+static const char *platform_chip_count_name(uint32_t value)
+{
+    switch ((value >> 3) & 0x3U) {
+    case 0x1U:
+        return "1p";
+    case 0x2U:
+        return "2p";
+    default:
+        return "unknown";
+    }
+}
+
+static const char *platform_soc_name(uint32_t value)
+{
+    return ((value >> 8) & 0x1U) == 0 ? "soc-a" : "soc-b";
+}
+
 static const char *sram_adapt_mode_name(uint32_t value)
 {
     if (value == INDICATE_MDC_ADAPTIVE_VAL) {
@@ -520,6 +570,57 @@ static const char *reboot_reason_name(uint32_t value)
     }
 }
 
+static const char *usb_efuse_name(uint32_t value)
+{
+    return (value & (1U << 1)) != 0 ? "usb-boot-not-forced" : "usb-boot-may-trigger";
+}
+
+static const char *flash_update_flag_name(uint32_t value)
+{
+    return value == 0xD6C55BC1U ? "update-scene" : "inactive";
+}
+
+static const char *flash_update_area_name(uint32_t value)
+{
+    return value == 0xC11CB55BU ? "main-a" : "back-b-or-other";
+}
+
+static const char *flash_recovery_force_name(uint32_t value)
+{
+    if (value == UINT32_MAX) {
+        return "erased-or-unset";
+    }
+    if (value == 0) {
+        return "clear";
+    }
+    return "set";
+}
+
+static const char *warmstart_flag_name(uint32_t value)
+{
+    return value == 0 ? "cold-entry" : "warm-start";
+}
+
+static const char *next_try_slot_name(uint32_t value)
+{
+    uint32_t next = (value + 1U) % 8U;
+
+    return next < 4U ? "main" : "back";
+}
+
+static const char *recovery_cycle_name(uint32_t value)
+{
+    uint32_t mod = value % 16U;
+
+    if (mod <= 7U) {
+        return "os-range";
+    }
+    if (mod <= 11U) {
+        return "recovery-main-range";
+    }
+    return "recovery-back-range";
+}
+
 static void print_reboot_reason_line(const char *label, uint32_t value, bool valid, const char *role)
 {
     if (!valid) {
@@ -535,8 +636,30 @@ static void print_reboot_reason_line(const char *label, uint32_t value, bool val
 
 static void print_mem_field_value(const struct mem_field *field, uint32_t value)
 {
+    if (strcmp(field->name, "mem.run_img_loc") == 0) {
+        printf("0x%08" PRIx32 " (medium=%s, slot=%s)\n",
+               value, run_img_medium_name(value), run_img_slot_name(value));
+        return;
+    }
+    if (strcmp(field->name, "mem.reset_src") == 0) {
+        printf("0x%08" PRIx32 " (%s)\n", value, reset_src_state_name(value));
+        return;
+    }
+    if (strcmp(field->name, "mem.platform_info") == 0) {
+        printf("0x%08" PRIx32 " (mode=%s, chip=%s, %s)\n",
+               value, platform_mode_name(value), platform_chip_count_name(value), platform_soc_name(value));
+        return;
+    }
     if (strcmp(field->name, "mem.force_boot") == 0) {
         printf("0x%08" PRIx32 " (%s)\n", value, force_boot_mode_name(value));
+        return;
+    }
+    if (strcmp(field->name, "mem.usb_efuse") == 0) {
+        printf("0x%08" PRIx32 " (%s)\n", value, usb_efuse_name(value));
+        return;
+    }
+    if (strcmp(field->name, "mem.pcie_boot_index") == 0) {
+        printf("0x%08" PRIx32 " (mailbox-file-index=%" PRIu32 ")\n", value, value);
         return;
     }
     if (strcmp(field->name, "mem.emmc_init_flag") == 0) {
@@ -552,9 +675,40 @@ static void print_mem_field_value(const struct mem_field *field, uint32_t value)
         printf("0x%08" PRIx32 " (%s)\n", value, hsm_ready_state_name(value));
         return;
     }
+    if (strcmp(field->name, "mem.firmware_resetcnt") == 0) {
+        printf("0x%08" PRIx32 " (%" PRIu32 ", mod8=%" PRIu32 ")\n", value, value, value % 8U);
+        return;
+    }
+    if (strcmp(field->name, "mem.warmstart_flag") == 0) {
+        printf("0x%08" PRIx32 " (%s)\n", value, warmstart_flag_name(value));
+        return;
+    }
+    if (strcmp(field->name, "mem.os_resetcnt") == 0) {
+        printf("0x%08" PRIx32 " (%" PRIu32 ", next_try=%s)\n", value, value, next_try_slot_name(value));
+        return;
+    }
+    if (strcmp(field->name, "mem.recovery_resetcnt") == 0) {
+        printf("0x%08" PRIx32 " (%" PRIu32 ", next_try=%s)\n", value, value, next_try_slot_name(value));
+        return;
+    }
     if (strcmp(field->name, "mem.ver_ver") == 0) {
         printf("0x%08" PRIx32 " (platform=%s, version=0x%04" PRIx32 ")\n",
                value, platform_type_name(value), platform_version_value(value));
+        return;
+    }
+    if (strcmp(field->name, "flash.update_flag.main") == 0 ||
+        strcmp(field->name, "flash.update_flag.back") == 0) {
+        printf("0x%08" PRIx32 " (%s)\n", value, flash_update_flag_name(value));
+        return;
+    }
+    if (strcmp(field->name, "flash.update_area.main") == 0 ||
+        strcmp(field->name, "flash.update_area.back") == 0) {
+        printf("0x%08" PRIx32 " (%s)\n", value, flash_update_area_name(value));
+        return;
+    }
+    if (strcmp(field->name, "flash.recovery_force.main") == 0 ||
+        strcmp(field->name, "flash.recovery_force.back") == 0) {
+        printf("0x%08" PRIx32 " (%s)\n", value, flash_recovery_force_name(value));
         return;
     }
     if (strcmp(field->name, "sram.adapt_mode") == 0) {
@@ -580,6 +734,11 @@ static void print_mem_field_value(const struct mem_field *field, uint32_t value)
     }
     if (strcmp(field->name, "sram.recovery_init_flag") == 0) {
         printf("0x%08" PRIx32 " (raw; no semantic use found in hboot)\n", value);
+        return;
+    }
+    if (strcmp(field->name, "sram.recovery_count") == 0) {
+        printf("0x%08" PRIx32 " (%" PRIu32 ", mod16=%" PRIu32 ", %s)\n",
+               value, value, value % 16U, recovery_cycle_name(value));
         return;
     }
     printf("0x%08" PRIx32 " (%" PRIu32 ")\n", value, value);
@@ -712,31 +871,51 @@ static void dump_value_line_hex(const char *label, uint32_t value, bool valid)
     }
 }
 
-static void dump_value_line_hex_dec(const char *label, uint32_t value, bool valid)
-{
-    if (valid) {
-        printf("  %-19s: 0x%08" PRIx32 " (%" PRIu32 ")\n", label, value, value);
-    } else {
-        printf("  %-19s: unavailable\n", label);
-    }
-}
-
 static void dump_mem(const struct mem_snapshot *mem)
 {
     printf("[mem]\n");
 
     dump_value_line_hex("board_id", mem->board_id, mem->board_id_valid);
-    dump_value_line_hex("run_img_loc", mem->run_img_loc, mem->run_img_loc_valid);
-    dump_value_line_hex("reset_src", mem->reset_src, mem->reset_src_valid);
-    dump_value_line_hex("platform_info", mem->platform_info, mem->platform_info_valid);
+    if (mem->run_img_loc_valid) {
+        printf("  %-19s: 0x%08" PRIx32 " (medium=%s, slot=%s)\n",
+               "run_img_loc", mem->run_img_loc,
+               run_img_medium_name(mem->run_img_loc), run_img_slot_name(mem->run_img_loc));
+    } else {
+        printf("  %-19s: unavailable\n", "run_img_loc");
+    }
+    if (mem->reset_src_valid) {
+        printf("  %-19s: 0x%08" PRIx32 " (%s)\n",
+               "reset_src", mem->reset_src, reset_src_state_name(mem->reset_src));
+    } else {
+        printf("  %-19s: unavailable\n", "reset_src");
+    }
+    if (mem->platform_info_valid) {
+        printf("  %-19s: 0x%08" PRIx32 " (mode=%s, chip=%s, %s)\n",
+               "platform_info", mem->platform_info,
+               platform_mode_name(mem->platform_info),
+               platform_chip_count_name(mem->platform_info),
+               platform_soc_name(mem->platform_info));
+    } else {
+        printf("  %-19s: unavailable\n", "platform_info");
+    }
     if (mem->force_boot_valid) {
         printf("  %-19s: 0x%08" PRIx32 " (%s)\n", "force_boot", mem->force_boot,
                force_boot_mode_name(mem->force_boot));
     } else {
         printf("  %-19s: unavailable\n", "force_boot");
     }
-    dump_value_line_hex("usb_efuse", mem->usb_efuse, mem->usb_efuse_valid);
-    dump_value_line_hex("pcie_boot_index", mem->pcie_boot_index, mem->pcie_boot_index_valid);
+    if (mem->usb_efuse_valid) {
+        printf("  %-19s: 0x%08" PRIx32 " (%s)\n",
+               "usb_efuse", mem->usb_efuse, usb_efuse_name(mem->usb_efuse));
+    } else {
+        printf("  %-19s: unavailable\n", "usb_efuse");
+    }
+    if (mem->pcie_boot_index_valid) {
+        printf("  %-19s: 0x%08" PRIx32 " (mailbox-file-index=%" PRIu32 ")\n",
+               "pcie_boot_index", mem->pcie_boot_index, mem->pcie_boot_index);
+    } else {
+        printf("  %-19s: unavailable\n", "pcie_boot_index");
+    }
     if (mem->emmc_init_flag_valid) {
         printf("  %-19s: 0x%08" PRIx32 " (%s)\n", "emmc_init_flag", mem->emmc_init_flag,
                emmc_init_state_name(mem->emmc_init_flag));
@@ -757,10 +936,32 @@ static void dump_mem(const struct mem_snapshot *mem)
     } else {
         printf("  %-19s: unavailable\n", "hsm_ready_flag");
     }
-    dump_value_line_hex_dec("firmware_resetcnt", mem->firmware_resetcnt, mem->firmware_resetcnt_valid);
-    dump_value_line_hex_dec("warmstart_flag", mem->warmstart_flag, mem->warmstart_flag_valid);
-    dump_value_line_hex_dec("os_resetcnt", mem->os_resetcnt, mem->os_resetcnt_valid);
-    dump_value_line_hex_dec("recovery_resetcnt", mem->recovery_resetcnt, mem->recovery_resetcnt_valid);
+    if (mem->firmware_resetcnt_valid) {
+        printf("  %-19s: 0x%08" PRIx32 " (%" PRIu32 ", mod8=%" PRIu32 ")\n",
+               "firmware_resetcnt", mem->firmware_resetcnt,
+               mem->firmware_resetcnt, mem->firmware_resetcnt % 8U);
+    } else {
+        printf("  %-19s: unavailable\n", "firmware_resetcnt");
+    }
+    if (mem->warmstart_flag_valid) {
+        printf("  %-19s: 0x%08" PRIx32 " (%s)\n",
+               "warmstart_flag", mem->warmstart_flag, warmstart_flag_name(mem->warmstart_flag));
+    } else {
+        printf("  %-19s: unavailable\n", "warmstart_flag");
+    }
+    if (mem->os_resetcnt_valid) {
+        printf("  %-19s: 0x%08" PRIx32 " (%" PRIu32 ", next_try=%s)\n",
+               "os_resetcnt", mem->os_resetcnt, mem->os_resetcnt, next_try_slot_name(mem->os_resetcnt));
+    } else {
+        printf("  %-19s: unavailable\n", "os_resetcnt");
+    }
+    if (mem->recovery_resetcnt_valid) {
+        printf("  %-19s: 0x%08" PRIx32 " (%" PRIu32 ", next_try=%s)\n",
+               "recovery_resetcnt", mem->recovery_resetcnt,
+               mem->recovery_resetcnt, next_try_slot_name(mem->recovery_resetcnt));
+    } else {
+        printf("  %-19s: unavailable\n", "recovery_resetcnt");
+    }
     print_reboot_reason_line("sw_excep_code7", mem->sw_excep_code7, mem->sw_excep_code7_valid, "os");
     if (mem->sw_excep_code8_valid) {
         printf("  %-19s: 0x%08" PRIx32 " (%s)\n", "sw_excep_code8", mem->sw_excep_code8,
@@ -790,19 +991,58 @@ static void dump_mem(const struct mem_snapshot *mem)
     } else {
         printf("  %-19s: unavailable\n", "ver_ver");
     }
-    dump_value_line_hex("flash.upd_flag.a", mem->flash_update_flag_main, mem->flash_update_flag_main_valid);
-    dump_value_line_hex("flash.upd_area.a", mem->flash_update_area_main, mem->flash_update_area_main_valid);
-    dump_value_line_hex("flash.rec_force.a", mem->flash_recovery_force_main, mem->flash_recovery_force_main_valid);
-    dump_value_line_hex("flash.upd_flag.b", mem->flash_update_flag_back, mem->flash_update_flag_back_valid);
-    dump_value_line_hex("flash.upd_area.b", mem->flash_update_area_back, mem->flash_update_area_back_valid);
-    dump_value_line_hex("flash.rec_force.b", mem->flash_recovery_force_back, mem->flash_recovery_force_back_valid);
+    if (mem->flash_update_flag_main_valid) {
+        printf("  %-19s: 0x%08" PRIx32 " (%s)\n",
+               "flash.upd_flag.a", mem->flash_update_flag_main, flash_update_flag_name(mem->flash_update_flag_main));
+    } else {
+        printf("  %-19s: unavailable\n", "flash.upd_flag.a");
+    }
+    if (mem->flash_update_area_main_valid) {
+        printf("  %-19s: 0x%08" PRIx32 " (%s)\n",
+               "flash.upd_area.a", mem->flash_update_area_main, flash_update_area_name(mem->flash_update_area_main));
+    } else {
+        printf("  %-19s: unavailable\n", "flash.upd_area.a");
+    }
+    if (mem->flash_recovery_force_main_valid) {
+        printf("  %-19s: 0x%08" PRIx32 " (%s)\n",
+               "flash.rec_force.a", mem->flash_recovery_force_main,
+               flash_recovery_force_name(mem->flash_recovery_force_main));
+    } else {
+        printf("  %-19s: unavailable\n", "flash.rec_force.a");
+    }
+    if (mem->flash_update_flag_back_valid) {
+        printf("  %-19s: 0x%08" PRIx32 " (%s)\n",
+               "flash.upd_flag.b", mem->flash_update_flag_back, flash_update_flag_name(mem->flash_update_flag_back));
+    } else {
+        printf("  %-19s: unavailable\n", "flash.upd_flag.b");
+    }
+    if (mem->flash_update_area_back_valid) {
+        printf("  %-19s: 0x%08" PRIx32 " (%s)\n",
+               "flash.upd_area.b", mem->flash_update_area_back, flash_update_area_name(mem->flash_update_area_back));
+    } else {
+        printf("  %-19s: unavailable\n", "flash.upd_area.b");
+    }
+    if (mem->flash_recovery_force_back_valid) {
+        printf("  %-19s: 0x%08" PRIx32 " (%s)\n",
+               "flash.rec_force.b", mem->flash_recovery_force_back,
+               flash_recovery_force_name(mem->flash_recovery_force_back));
+    } else {
+        printf("  %-19s: unavailable\n", "flash.rec_force.b");
+    }
     if (mem->sram_adapt_mode_valid) {
         printf("  %-19s: 0x%08" PRIx32 " (%s)\n", "sram.adapt_mode", mem->sram_adapt_mode,
                sram_adapt_mode_name(mem->sram_adapt_mode));
     } else {
         printf("  %-19s: unavailable\n", "sram.adapt_mode");
     }
-    dump_value_line_hex_dec("sram.recovery_count", mem->sram_recovery_count, mem->sram_recovery_count_valid);
+    if (mem->sram_recovery_count_valid) {
+        printf("  %-19s: 0x%08" PRIx32 " (%" PRIu32 ", mod16=%" PRIu32 ", %s)\n",
+               "sram.recovery_count", mem->sram_recovery_count,
+               mem->sram_recovery_count, mem->sram_recovery_count % 16U,
+               recovery_cycle_name(mem->sram_recovery_count));
+    } else {
+        printf("  %-19s: unavailable\n", "sram.recovery_count");
+    }
     if (mem->sram_recovery_init_flag_valid) {
         printf("  %-19s: 0x%08" PRIx32 " (raw; no semantic use found in hboot)\n",
                "sram.recov_init", mem->sram_recovery_init_flag);
