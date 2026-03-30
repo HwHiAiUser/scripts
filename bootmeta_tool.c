@@ -49,6 +49,7 @@ enum command_kind {
     CMD_DUMP,
     CMD_GET,
     CMD_SET,
+    CMD_FLASH,
 };
 
 enum layout_mode_kind {
@@ -72,6 +73,16 @@ struct layout_image {
     struct blob_region boot[2];
     struct blob_region recovery[2];
     uint64_t base_offset;
+};
+
+struct image_target {
+    struct blob_region *region;
+    uint32_t index;
+    uint32_t component_count;
+    uint64_t image_offset;
+    uint64_t write_offset;
+    uint64_t data_size;
+    uint64_t max_size;
 };
 
 static uint32_t read_le32(const uint8_t *p)
@@ -171,6 +182,11 @@ static uint64_t layout_relative_offset(enum layout_mode_kind layout_mode, uint64
         return disk_offset - RAW_BOOT_DISK_OFFSET;
     }
     return disk_offset;
+}
+
+static uint64_t layout_absolute_data_offset(enum layout_mode_kind layout_mode, uint64_t base_offset, uint64_t disk_offset)
+{
+    return base_offset + layout_relative_offset(layout_mode, disk_offset);
 }
 
 static void init_layout(struct layout_image *layout, enum layout_mode_kind layout_mode, uint64_t base_offset)
@@ -610,6 +626,161 @@ static int parse_integer_arg(const char *text, uint64_t *value_out)
     return 0;
 }
 
+static int shell_quote_single(const char *text, char **quoted_out)
+{
+    size_t len = strlen(text);
+    size_t i;
+    char *quoted = malloc(len * 4 + 3);
+    char *p;
+
+    if (quoted == NULL) {
+        return -1;
+    }
+
+    p = quoted;
+    *p++ = '\'';
+    for (i = 0; i < len; ++i) {
+        if (text[i] == '\'') {
+            memcpy(p, "'\\''", 4);
+            p += 4;
+        } else {
+            *p++ = text[i];
+        }
+    }
+    *p++ = '\'';
+    *p = '\0';
+    *quoted_out = quoted;
+    return 0;
+}
+
+static void print_dd_equivalent(const char *src_path, const char *dst_path, uint64_t write_offset)
+{
+    char *src_quoted = NULL;
+    char *dst_quoted = NULL;
+    uint64_t sector_seek = write_offset / 512ULL;
+
+    if (shell_quote_single(src_path, &src_quoted) != 0 || shell_quote_single(dst_path, &dst_quoted) != 0) {
+        free(src_quoted);
+        free(dst_quoted);
+        return;
+    }
+
+    if ((write_offset % 512ULL) == 0) {
+        fprintf(stderr,
+                "Equivalent dd:\n"
+                "  dd if=%s of=%s bs=512 seek=%" PRIu64 " conv=fsync,notrunc status=progress iflag=fullblock\n",
+                src_quoted, dst_quoted, sector_seek);
+    } else {
+        fprintf(stderr,
+                "Equivalent dd:\n"
+                "  dd if=%s of=%s bs=1 seek=%" PRIu64 " conv=fsync,notrunc status=progress iflag=fullblock\n",
+                src_quoted, dst_quoted, write_offset);
+    }
+
+    free(src_quoted);
+    free(dst_quoted);
+}
+
+static int resolve_image_target(struct layout_image *layout, enum layout_mode_kind layout_mode, uint64_t base_offset,
+                                const char *target_path, struct image_target *target_out)
+{
+    struct blob_region *candidates[] = {
+        &layout->boot[0], &layout->boot[1],
+        &layout->recovery[0], &layout->recovery[1],
+    };
+    size_t i;
+
+    memset(target_out, 0, sizeof(*target_out));
+
+    for (i = 0; i < ARRAY_SIZE(candidates); ++i) {
+        struct blob_region *region = candidates[i];
+        size_t len = strlen(region->label);
+        const char *suffix;
+        uint32_t index;
+        const char *rest;
+        size_t base;
+
+        if (strncmp(target_path, region->label, len) != 0 || target_path[len] != '.') {
+            continue;
+        }
+
+        suffix = target_path + len + 1;
+        if (!parse_index_expr(suffix, "image[", MAX_IMAGE_COUNT, &index, &rest) || *rest != '\0') {
+            continue;
+        }
+
+        target_out->region = region;
+        target_out->index = index;
+        target_out->component_count = read_le32(region->raw + 76);
+        if (target_out->component_count > MAX_IMAGE_COUNT) {
+            target_out->component_count = MAX_IMAGE_COUNT;
+        }
+        base = 80 + index * 64;
+        target_out->image_offset = read_le64(region->raw + base + 24);
+        target_out->write_offset = layout_absolute_data_offset(layout_mode, base_offset, target_out->image_offset);
+        target_out->data_size = read_le64(region->raw + base + 32);
+        target_out->max_size = read_le64(region->raw + base + 40);
+        return 0;
+    }
+
+    return -1;
+}
+
+static int copy_file_range_to_offset(int src_fd, int dst_fd, uint64_t dst_offset, uint64_t total_size)
+{
+    uint8_t buffer[1024 * 1024];
+    uint64_t written = 0;
+
+    while (written < total_size) {
+        size_t chunk = sizeof(buffer);
+        ssize_t rd;
+
+        if ((uint64_t)chunk > total_size - written) {
+            chunk = (size_t)(total_size - written);
+        }
+
+        rd = read(src_fd, buffer, chunk);
+        if (rd < 0) {
+            return -1;
+        }
+        if (rd == 0) {
+            errno = EIO;
+            return -1;
+        }
+        if (write_full_at(dst_fd, buffer, (size_t)rd, dst_offset + written) != 0) {
+            return -1;
+        }
+        written += (uint64_t)rd;
+    }
+
+    return 0;
+}
+
+static bool prompt_yes_no(const char *prompt)
+{
+    char answer[32];
+    size_t i;
+    size_t len;
+
+    fprintf(stderr, "%s", prompt);
+    fflush(stderr);
+
+    if (fgets(answer, sizeof(answer), stdin) == NULL) {
+        return false;
+    }
+
+    len = strlen(answer);
+    while (len > 0 && isspace((unsigned char)answer[len - 1])) {
+        answer[--len] = '\0';
+    }
+
+    for (i = 0; i < len; ++i) {
+        answer[i] = (char)tolower((unsigned char)answer[i]);
+    }
+
+    return strcmp(answer, "y") == 0 || strcmp(answer, "yes") == 0;
+}
+
 static int locate_field(struct blob_region *region, const char *field,
                         size_t *offset_out, size_t *width_out, size_t *str_width_out)
 {
@@ -871,6 +1042,7 @@ static void usage(FILE *stream)
             "  bootmeta_tool dump [--layout auto|whole-disk|raw-boot] [--base-offset N] <path>\n"
             "  bootmeta_tool get  [--layout auto|whole-disk|raw-boot] [--base-offset N] <path> <field>\n"
             "  bootmeta_tool set  [--layout auto|whole-disk|raw-boot] [--base-offset N] <path> <field> <value>\n"
+            "  bootmeta_tool flash [-y] [--layout auto|whole-disk|raw-boot] [--base-offset N] <path> <image-target> <image-file>\n"
             "\n"
             "Field path examples:\n"
             "  part_info.main.partition_count\n"
@@ -879,7 +1051,13 @@ static void usage(FILE *stream)
             "  boot.back.image[1].offset\n"
             "  recovery.main.image[2].max_size\n"
             "\n"
+            "Flash target examples:\n"
+            "  boot.main.image[0]\n"
+            "  boot.back.image[2]\n"
+            "  recovery.main.image[3]\n"
+            "\n"
             "Notes:\n"
+            "  flash asks for confirmation before writing; use -y to skip the prompt.\n"
             "  auto probes both whole-disk and raw-boot interpretations.\n"
             "  whole-disk reads metadata at absolute offsets 0x100000/0x120000/...\n"
             "  raw-boot treats the blob start as metadata base, so offsets become 0x0/0x200/0x20000/...\n"
@@ -920,10 +1098,12 @@ int main(int argc, char **argv)
     const char *path;
     const char *field = NULL;
     const char *value = NULL;
+    const char *image_file = NULL;
     const char *layout_mode_name = "auto";
     enum layout_mode_kind layout_mode = LAYOUT_AUTO;
     uint64_t base_offset = REGION_BASE_DEFAULT;
     bool base_explicit = false;
+    bool assume_yes = false;
     int fd;
     int open_flags;
     struct layout_image layout;
@@ -940,13 +1120,23 @@ int main(int argc, char **argv)
         cmd = CMD_GET;
     } else if (strcmp(argv[argi], "set") == 0) {
         cmd = CMD_SET;
+    } else if (strcmp(argv[argi], "flash") == 0) {
+        cmd = CMD_FLASH;
     } else {
         usage(stderr);
         return 1;
     }
     ++argi;
 
-    while (argi < argc && strncmp(argv[argi], "--", 2) == 0) {
+    while (argi < argc) {
+        if (strcmp(argv[argi], "-y") == 0) {
+            assume_yes = true;
+            ++argi;
+            continue;
+        }
+        if (strncmp(argv[argi], "--", 2) != 0) {
+            break;
+        }
         if (strcmp(argv[argi], "--layout") == 0) {
             if (argi + 1 >= argc ||
                 parse_layout_mode(argv[argi + 1], &layout_mode, &base_offset, &base_explicit) != 0) {
@@ -972,7 +1162,8 @@ int main(int argc, char **argv)
 
     if ((cmd == CMD_DUMP && argc - argi != 1) ||
         (cmd == CMD_GET && argc - argi != 2) ||
-        (cmd == CMD_SET && argc - argi != 3)) {
+        (cmd == CMD_SET && argc - argi != 3) ||
+        (cmd == CMD_FLASH && argc - argi != 3)) {
         usage(stderr);
         return 1;
     }
@@ -983,9 +1174,11 @@ int main(int argc, char **argv)
     }
     if (cmd == CMD_SET) {
         value = argv[argi++];
+    } else if (cmd == CMD_FLASH) {
+        image_file = argv[argi++];
     }
 
-    open_flags = (cmd == CMD_SET) ? O_RDWR : O_RDONLY;
+    open_flags = (cmd == CMD_SET || cmd == CMD_FLASH) ? O_RDWR : O_RDONLY;
     fd = open(path, open_flags);
     if (fd < 0) {
         perror(path);
@@ -1056,6 +1249,116 @@ int main(int argc, char **argv)
             return 1;
         }
         if (flush_region(fd, region) != 0) {
+            perror("write metadata");
+            close(fd);
+            return 1;
+        }
+        if (fsync(fd) != 0) {
+            perror("fsync");
+            close(fd);
+            return 1;
+        }
+        close(fd);
+        return 0;
+    }
+
+    if (cmd == CMD_FLASH) {
+        struct image_target target;
+        int src_fd;
+        struct stat st;
+        size_t data_size_offset;
+
+        if (resolve_image_target(&layout, layout_mode, base_offset, field, &target) != 0) {
+            fprintf(stderr, "unknown flash target: %s\n", field);
+            close(fd);
+            return 1;
+        }
+        if (target.index >= target.component_count) {
+            fprintf(stderr, "flash target %s is outside component_count=%" PRIu32 "\n", field, target.component_count);
+            close(fd);
+            return 1;
+        }
+        if (target.max_size == 0) {
+            fprintf(stderr, "flash target %s has max_size=0, refusing to write\n", field);
+            close(fd);
+            return 1;
+        }
+        if (target.image_offset == 0) {
+            fprintf(stderr, "flash target %s has offset=0, refusing to write\n", field);
+            close(fd);
+            return 1;
+        }
+
+        src_fd = open(image_file, O_RDONLY);
+        if (src_fd < 0) {
+            perror(image_file);
+            close(fd);
+            return 1;
+        }
+        if (fstat(src_fd, &st) != 0) {
+            perror("stat image");
+            close(src_fd);
+            close(fd);
+            return 1;
+        }
+        if (!S_ISREG(st.st_mode)) {
+            fprintf(stderr, "image file must be a regular file: %s\n", image_file);
+            close(src_fd);
+            close(fd);
+            return 1;
+        }
+        if ((uint64_t)st.st_size > target.max_size) {
+            fprintf(stderr,
+                    "image too large for %s: file=%" PRIu64 " bytes (%.6f MiB), max=%" PRIu64 " bytes (%.6f MiB)\n",
+                    field, (uint64_t)st.st_size, bytes_to_mib((uint64_t)st.st_size),
+                    target.max_size, bytes_to_mib(target.max_size));
+            close(src_fd);
+            close(fd);
+            return 1;
+        }
+
+        fprintf(stderr,
+                "Flashing %s -> %s\n"
+                "  image_offset : 0x%016" PRIx64 " (%" PRIu64 ", %.6f MiB)\n"
+                "  write_offset : 0x%016" PRIx64 " (%" PRIu64 ", %.6f MiB)\n"
+                "  file_size    : %" PRIu64 " bytes (%.6f MiB)\n"
+                "  max_size     : %" PRIu64 " bytes (%.6f MiB)\n",
+                image_file, field,
+                target.image_offset, target.image_offset, bytes_to_mib(target.image_offset),
+                target.write_offset, target.write_offset, bytes_to_mib(target.write_offset),
+                (uint64_t)st.st_size, bytes_to_mib((uint64_t)st.st_size),
+                target.max_size, bytes_to_mib(target.max_size));
+        print_dd_equivalent(image_file, path, target.write_offset);
+        if (!assume_yes) {
+            if (!isatty(STDIN_FILENO)) {
+                fprintf(stderr, "refusing to flash without confirmation on non-interactive stdin; rerun with -y\n");
+                close(src_fd);
+                close(fd);
+                return 1;
+            }
+            if (!prompt_yes_no("Proceed with flash? [y/N] ")) {
+                fprintf(stderr, "flash cancelled\n");
+                close(src_fd);
+                close(fd);
+                return 1;
+            }
+        }
+
+        if (copy_file_range_to_offset(src_fd, fd, target.write_offset, (uint64_t)st.st_size) != 0) {
+            perror("flash image");
+            close(src_fd);
+            close(fd);
+            return 1;
+        }
+        close(src_fd);
+
+        data_size_offset = 80 + target.index * 64 + 32;
+        write_le64(target.region->raw + data_size_offset, (uint64_t)st.st_size);
+        if (update_region_crc(target.region) != 0) {
+            close(fd);
+            return 1;
+        }
+        if (flush_region(fd, target.region) != 0) {
             perror("write metadata");
             close(fd);
             return 1;

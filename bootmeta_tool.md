@@ -142,6 +142,35 @@
 ./bootmeta_tool set /dev/mmcblk1 part_ctrl.main.force_recovery_flag 0x55AA55AA
 ```
 
+### 4.4 `flash`
+
+把一个实际镜像文件写入某个 `boot.*.image[i]` 或 `recovery.*.image[i]` 描述的盘上区域。
+
+```bash
+./bootmeta_tool flash [-y] [--layout auto|whole-disk|raw-boot] [--base-offset N] <path> <image-target> <image-file>
+```
+
+示例：
+
+```bash
+./bootmeta_tool flash /dev/mmcblk1 boot.main.image[0] Image
+./bootmeta_tool flash -y /dev/mmcblk1 boot.main.image[0] Image
+./bootmeta_tool flash /dev/mmcblk1 boot.back.image[1] dt.img
+./bootmeta_tool flash /dev/mmcblk1 recovery.main.image[3] initrd.img
+./bootmeta_tool flash --layout raw-boot boot_region.bin boot.main.image[2] itrustee.img
+```
+
+`flash` 的行为是：
+
+- 先读取目标目录项里的 `ImageInfo[i].Offset`
+- 再读取 `ImageInfo[i].MaxSize`
+- 检查输入文件大小不能超过 `MaxSize`
+- 默认在真正写入前要求人工确认
+- 带 `-y` 时跳过确认，适合脚本或 CI
+- 把文件原样写到该 `Offset` 对应的位置
+- 写完后把该目录项的 `ImageInfo[i].DataSize` 更新为本次文件大小
+- 最后打印一个等效的 `dd` 命令，方便你手工复现
+
 ## 5. 字段路径规则
 
 ### 5.1 分区信息头 `part_info.*`
@@ -194,6 +223,12 @@
 - `boot.main.crc`
 
 `boot.back`、`recovery.main`、`recovery.back` 同理。
+
+`flash` 的 `<image-target>` 只接受镜像项级别路径，例如：
+
+- `boot.main.image[0]`
+- `boot.back.image[2]`
+- `recovery.main.image[3]`
 
 ## 6. dump 输出中每个“工具字段”的含义
 
@@ -480,6 +515,11 @@
 - `boot.main.image[1].offset = dt.img 在盘上的偏移`
 - `boot.main.image[2].offset = tee 在盘上的偏移`
 
+`bootmeta_tool flash` 最终也是把输入文件写到这个 `Offset` 指向的位置。所以：
+
+- 改 `Offset` 是在改目录指针
+- 执行 `flash` 是往目录指向的位置写内容
+
 ### `ImageInfo[i].DataSize`
 
 目录记录的实际数据大小。
@@ -487,6 +527,8 @@
 当前 `hboot` 主加载路径里，普通 eMMC/SD 启动并不完全依赖它，而是会先读 secure header，再根据安全头里的 `UwLCodeLen` 算真实装载长度。
 
 但这个字段对分析盘内容、构建镜像、做一致性检查仍然很有价值。
+
+`bootmeta_tool flash` 在写完镜像后，会自动把对应条目的 `DataSize` 更新成这次输入文件的真实大小。
 
 ### `ImageInfo[i].MaxSize`
 
@@ -496,6 +538,12 @@
 
 - 对 SSD/USB 按最大空间整块读取
 - 为越界检查、尾部清零提供上限语义
+
+`bootmeta_tool flash` 会把它当成硬上限：
+
+- 输入文件大小大于 `MaxSize` 时，直接拒绝写入
+
+这是最重要的防越界保护，因为这些镜像槽位在盘上通常是连续排布的，超写很容易覆盖后续组件。
 
 ### `ImageInfo[i].Rec[0]` / `Rec[1]`
 
@@ -590,6 +638,8 @@ recovery：
 
 都会直接影响加载循环次数。
 
+`flash` 也沿用这条边界：如果你指定的 `image[i]` 已经超出当前 `ComponentCount`，工具会拒绝写入。
+
 ### 8.5 决定从盘上哪里搬运镜像
 
 真正的读盘地址来自：
@@ -598,6 +648,12 @@ recovery：
 - `RecoveryImageInfo[PartIdx].ImageInfo[ImgIdx].Offset`
 
 这就是目录项 `offset` 字段的核心意义。
+
+`flash` 命令的设计完全复用了这套规则。比如：
+
+- `flash /dev/mmcblk1 boot.main.image[0] Image`
+
+本质上就是把 `Image` 写到后续 `ReadOsImageFromSdEmmc()` / `ReadOsImageFromSsdUsb()` 会读取的那个盘上偏移。
 
 ### 8.6 决定 Linux bootargs 指向哪个根文件系统
 
@@ -649,6 +705,11 @@ recovery：
 
 这是一种刻意保守的策略，避免生成一个“看起来正确，但并不一定符合厂商生成链”的值。
 
+`flash` 修改 `DataSize` 时也遵循这条规则：
+
+- 会回写目录块
+- 但不会擅自生成 `boot/recovery` 尾部 `crc`
+
 ## 11. 常见操作示例
 
 ### 11.1 看当前正常启动槽位的 kernel 偏移
@@ -683,6 +744,24 @@ recovery：
 ./bootmeta_tool set /dev/mmcblk1 boot.main.image[1].offset 0x3800000
 ```
 
+### 11.6 把 kernel 写入 boot.main 的第 0 个组件
+
+```bash
+./bootmeta_tool flash /dev/mmcblk1 boot.main.image[0] Image
+```
+
+### 11.7 把 recovery initrd 写到 recovery.main 的第 3 个组件
+
+```bash
+./bootmeta_tool flash /dev/mmcblk1 recovery.main.image[3] initrd.img
+```
+
+### 11.8 在脚本里跳过确认直接写入
+
+```bash
+./bootmeta_tool flash -y /dev/mmcblk1 boot.back.image[2] itrustee.img
+```
+
 ## 12. 风险提示
 
 ### 12.1 不要随意改 `component_count`
@@ -704,6 +783,24 @@ recovery：
 ```bash
 dd if=/dev/mmcblk1 of=bootmeta-backup.bin bs=1M count=2
 ```
+
+### 12.5 `flash` 打印的 `dd` 只覆盖“写内容”动作
+
+工具会打印等效 `dd` 命令，便于你手工复现写镜像本体。
+
+但如果你直接手工跑 `dd`：
+
+- 不会自动做 `MaxSize` 检查
+- 不会自动更新目录项里的 `DataSize`
+- 也不会帮你做额外的元数据一致性审计
+
+### 12.6 `flash` 默认会要求确认
+
+这是为了避免误写真实设备。
+
+- 交互式终端下，工具会在打印写入摘要后要求你输入 `y/yes`
+- 非交互环境下，如果没有 `-y`，工具会直接拒绝执行
+- 自动化脚本、批处理或 CI 请显式加 `-y`
 
 ## 13. 总结
 
