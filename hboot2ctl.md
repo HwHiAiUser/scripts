@@ -17,7 +17,7 @@ sudo ./hboot2ctl get mem.force_boot
 写单个字段：
 
 ```bash
-sudo ./hboot2ctl set mem.force_boot 0x10
+sudo ./hboot2ctl set mem.os_resetcnt 0x3
 ```
 
 说明：
@@ -25,34 +25,30 @@ sudo ./hboot2ctl set mem.force_boot 0x10
 - 输入既支持十进制，也支持十六进制。
 ## 常用目标速查
 
-强制下次从 OS 主区启动：
+查看当前实际从哪个槽位启动：
 
 ```bash
-sudo ./hboot2ctl set mem.force_boot 0x10
+sudo ./hboot2ctl get mem.run_img_loc
 ```
 
-强制下次从 OS 备区启动：
+查看当前强制启动寄存器状态：
 
 ```bash
-sudo ./hboot2ctl set mem.force_boot 0x14
+sudo ./hboot2ctl get mem.force_boot
 ```
 
-强制下次从 recovery 主区启动：
+让下一次 OS warm reboot 偏向主区：
 
 ```bash
-sudo ./hboot2ctl set mem.force_boot 0x18
+sudo ./hboot2ctl set mem.warmstart_flag 0x1
+sudo ./hboot2ctl set mem.os_resetcnt 0x0
 ```
 
-强制下次从 recovery 备区启动：
+让下一次 OS warm reboot 偏向备区：
 
 ```bash
-sudo ./hboot2ctl set mem.force_boot 0x1c
-```
-
-取消强制启动，恢复正常启动决策：
-
-```bash
-sudo ./hboot2ctl set mem.force_boot 0x0
+sudo ./hboot2ctl set mem.warmstart_flag 0x1
+sudo ./hboot2ctl set mem.os_resetcnt 0x3
 ```
 
 切到 customer header 验证方式：
@@ -65,20 +61,6 @@ sudo ./hboot2ctl set mem.os_verif_method 0x39593593
 
 ```bash
 sudo ./hboot2ctl set mem.os_verif_method 0x35933595
-```
-
-让下一次 OS warm reset 更偏向主区：
-
-```bash
-sudo ./hboot2ctl set mem.warmstart_flag 0x1
-sudo ./hboot2ctl set mem.os_resetcnt 0x0
-```
-
-让下一次 OS warm reset 更偏向备区：
-
-```bash
-sudo ./hboot2ctl set mem.warmstart_flag 0x1
-sudo ./hboot2ctl set mem.os_resetcnt 0x3
 ```
 
 让下一次 recovery 更偏向主区：
@@ -282,8 +264,8 @@ sudo ./hboot2ctl set mem.sw_excep_code7 0x24
 
 作用：
 
-- 这是最重要的启动覆盖寄存器之一。
-- hboot 会取它的低 5 bit 决定是否强制走某种启动路径。
+- hboot 会取它的低 5 bit 判断是否强制走某种启动路径。
+- 但这个寄存器在 hboot 源码里的定义不是“Linux 可稳定控制的启动状态”，而是“系统强制启动 cpld 值，mcu 读写，soc 只读”。
 
 已确认取值：
 
@@ -301,48 +283,39 @@ sudo ./hboot2ctl set mem.sw_excep_code7 0x24
 - 它会影响“启动 OS 还是 recovery”
 - 也会影响“从 main 还是 back 启动”
 
-这是最推荐人工调试的控制位：
+- 但这不代表 Linux 下直接 `set` 它就一定能控制下一次启动。
+- 从源码归属关系看，它更像 MCU/CPLD 提供给 SoC 读取的启动覆盖状态，而不是 SoC/Linux 持久写入的启动策略位。
+- 实际上，如果 hboot 启动时真的读到 `0x14`，它会把 OS 启动区改成 `back`。
+- 如果你在 Linux 下 `sudo ./hboot2ctl set mem.force_boot 0x14` 之后重启仍然从 `main` 启动，通常说明这个值在真正进入 hboot 前并没有被保留下来，或者已被 MCU/CPLD 覆盖。
 
-- 因为它语义清楚
-- 覆盖效果直接
-- 不用碰 metadata
+文档里的结论已经调整为：
 
-典型玩法：
+- `mem.force_boot` 适合“观察当前启动覆盖状态”
+- 不推荐作为 Linux 用户态切换启动槽位的方法
+- `hboot2ctl` 里不再把它当成推荐切槽入口
 
-强制 OS 主区：
+推荐怎么做：
+
+- 如果目标是“下一次软件重启后改走另一边 OS 槽位”，优先用 `mem.warmstart_flag + mem.os_resetcnt`
+- 如果目标是“模拟正式升级流程/冷启动判槽”，优先改 metadata，而不是改 `mem.force_boot`
+
+建议只读观察：
 
 ```bash
-sudo ./hboot2ctl set mem.force_boot 0x10
+sudo ./hboot2ctl get mem.force_boot
 ```
 
-强制 OS 备区：
+配合实际启动结果一起看：
 
 ```bash
-sudo ./hboot2ctl set mem.force_boot 0x14
-```
-
-强制 recovery 主区：
-
-```bash
-sudo ./hboot2ctl set mem.force_boot 0x18
-```
-
-强制 recovery 备区：
-
-```bash
-sudo ./hboot2ctl set mem.force_boot 0x1c
-```
-
-恢复默认决策：
-
-```bash
-sudo ./hboot2ctl set mem.force_boot 0x0
+sudo ./hboot2ctl get mem.run_img_loc
 ```
 
 推荐操作习惯：
 
-- 写入强制值
-- 重启观察效果
+- 先看 `mem.force_boot`
+- 再看 `mem.run_img_loc`
+- 真正切 OS 槽位时，优先改 `mem.os_resetcnt`
 - 测完后清回 `0`
 
 ## 四、镜像头验证与安全握手
@@ -596,6 +569,7 @@ sudo ./hboot2ctl set mem.sw_excep_code12 0x39
 作用：
 
 - OS 镜像 main/back 轮转计数器。
+- 这是当前文档推荐的“Linux 侧切换下一次 OS 槽位”的方法。
 
 源码决策逻辑：
 
@@ -620,18 +594,43 @@ sudo ./hboot2ctl set mem.sw_excep_code12 0x39
 
 典型玩法：
 
-让下次偏向 main：
+让下次 warm reboot 偏向 main：
 
 ```bash
 sudo ./hboot2ctl set mem.warmstart_flag 0x1
 sudo ./hboot2ctl set mem.os_resetcnt 0x0
 ```
 
-让下次偏向 back：
+让下次 warm reboot 偏向 back：
 
 ```bash
 sudo ./hboot2ctl set mem.warmstart_flag 0x1
 sudo ./hboot2ctl set mem.os_resetcnt 0x3
+```
+
+为什么这里要配合 `mem.warmstart_flag = 0x1`：
+
+- `GetFirstTryPos()` 在 `warmstart_flag == 0` 时，会把当前启动视为“首次进入”，优先按升级信息或默认 main 重新初始化计数。
+- 如果你想直接利用 `os_resetcnt` 控制“下一次”走哪边，最好先把 `warmstart_flag` 设成 `0x1`，避免 hboot 先重置这套计数逻辑。
+
+适用边界：
+
+- 适合“从当前 Linux 发起一次软件重启，然后让下一次 OS 改走 main/back”
+- 不等价于“永久改默认槽位”
+- 如果是完整掉电、升级场景、固件回滚场景，最终仍可能被 metadata / flash update 逻辑覆盖
+
+建议验证方式：
+
+```bash
+sudo ./hboot2ctl set mem.warmstart_flag 0x1
+sudo ./hboot2ctl set mem.os_resetcnt 0x3
+sudo reboot
+```
+
+重启后检查：
+
+```bash
+sudo ./hboot2ctl get mem.run_img_loc
 ```
 
 ### `mem.recovery_resetcnt` 对应 `SC_POR_REG3`
@@ -851,7 +850,7 @@ sudo ./hboot2ctl set sram.recovery_count 0xc
 | `mem.run_img_loc` | 一般不建议 | 看 hboot 记录的启动结果 |
 | `mem.reset_src` | 一般不建议 | 看 reset 来源，blackbox 调试 |
 | `mem.platform_info` | 一般不建议 | 看平台缓存状态 |
-| `mem.force_boot` | 推荐 | 强制切 OS/recovery 主备 |
+| `mem.force_boot` | 不建议从 Linux 手改 | 看 MCU/CPLD 提供的强制启动状态 |
 | `mem.usb_efuse` | 不建议 | USB 启动相关诊断 |
 | `mem.pcie_boot_index` | 不建议 | PCIe mailbox 启动调试 |
 | `mem.emmc_init_flag` | 可实验 | eMMC init 路径测试 |
@@ -887,9 +886,9 @@ sudo ./hboot2ctl set sram.recovery_count 0xc
 
 如果你的目标是“想控制下一次启动去哪边”，推荐优先级是：
 
-1. `mem.force_boot`
-2. `mem.warmstart_flag + mem.os_resetcnt`
-3. `mem.recovery_resetcnt`
+1. `mem.warmstart_flag + mem.os_resetcnt`
+2. `mem.recovery_resetcnt`
+3. `hboot2meta` 里的升级 metadata
 4. `sram.recovery_count`
 5. 最后才碰 `flash.*`
 
