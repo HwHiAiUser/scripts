@@ -1,15 +1,15 @@
-# bootmeta_tool 使用说明与字段解析
+# hboot2meta 使用说明与字段解析
 
 ## 1. 文档目的
 
-`bootmeta_tool` 用来直接读取或修改 Ascend 310B `hboot` 使用的启动元数据。它面向两类对象：
+`hboot2meta` 用来直接读取或修改 Ascend 310B `hboot` 使用的启动元数据。它面向两类对象：
 
 - 整块磁盘设备，例如 `/dev/mmcblk1`
 - 裁剪出来的 raw boot 区镜像，例如只包含 `0x100000 ~ 0x121000` 一段的 `boot_region.bin`
 
 这份文档做两件事：
 
-- 说明 `bootmeta_tool` 的命令行用法
+- 说明 `hboot2meta` 的命令行用法
 - 结合 `hboot` 源码说明每个字段在实际启动流程里的作用
 
 源码依据主要来自：
@@ -49,7 +49,7 @@
 
 也就是说，对整盘设备来说，这些偏移本身就是磁盘绝对偏移，不需要额外再加 1 MiB 基址。
 
-## 3. `bootmeta_tool` 的布局模式
+## 3. `hboot2meta` 的布局模式
 
 ### 3.1 `whole-disk`
 
@@ -63,7 +63,7 @@
 示例：
 
 ```bash
-./bootmeta_tool dump --layout whole-disk /dev/mmcblk1
+./hboot2meta dump --layout whole-disk /dev/mmcblk1
 ```
 
 ### 3.2 `raw-boot`
@@ -79,7 +79,7 @@
 示例：
 
 ```bash
-./bootmeta_tool dump --layout raw-boot boot_region.bin
+./hboot2meta dump --layout raw-boot boot_region.bin
 ```
 
 ### 3.3 `auto`
@@ -89,7 +89,7 @@
 示例：
 
 ```bash
-./bootmeta_tool dump --layout auto /dev/mmcblk1
+./hboot2meta dump --layout auto /dev/mmcblk1
 ```
 
 ## 4. 命令行用法
@@ -99,15 +99,15 @@
 打印所有元数据块。
 
 ```bash
-./bootmeta_tool dump [--layout auto|whole-disk|raw-boot] [--base-offset N] <path>
+./hboot2meta dump [--layout auto|whole-disk|raw-boot] [--base-offset N] <path>
 ```
 
 示例：
 
 ```bash
-./bootmeta_tool dump /dev/mmcblk1
-./bootmeta_tool dump --layout whole-disk disk.img
-./bootmeta_tool dump --layout raw-boot boot_region.bin
+./hboot2meta dump /dev/mmcblk1
+./hboot2meta dump --layout whole-disk disk.img
+./hboot2meta dump --layout raw-boot boot_region.bin
 ```
 
 ### 4.2 `get`
@@ -115,15 +115,15 @@
 读取单个字段。
 
 ```bash
-./bootmeta_tool get [--layout auto|whole-disk|raw-boot] [--base-offset N] <path> <field>
+./hboot2meta get [--layout auto|whole-disk|raw-boot] [--base-offset N] <path> <field>
 ```
 
 示例：
 
 ```bash
-./bootmeta_tool get /dev/mmcblk1 part_info.main.partition_count
-./bootmeta_tool get /dev/mmcblk1 part_ctrl.main.upgrade[0].upgrade_status
-./bootmeta_tool get /dev/mmcblk1 boot.main.image[0].offset
+./hboot2meta get /dev/mmcblk1 part_info.main.partition_count
+./hboot2meta get /dev/mmcblk1 part_ctrl.main.upgrade[0].upgrade_status
+./hboot2meta get /dev/mmcblk1 boot.main.image[0].offset
 ```
 
 ### 4.3 `set`
@@ -131,15 +131,15 @@
 修改单个字段，并只回写对应 metadata block。
 
 ```bash
-./bootmeta_tool set [--layout auto|whole-disk|raw-boot] [--base-offset N] <path> <field> <value>
+./hboot2meta set [--layout auto|whole-disk|raw-boot] [--base-offset N] <path> <field> <value>
 ```
 
 示例：
 
 ```bash
-./bootmeta_tool set /dev/mmcblk1 boot.main.partition_name PARTUUID=xxxx
-./bootmeta_tool set /dev/mmcblk1 boot.main.image[1].offset 0x3800000
-./bootmeta_tool set /dev/mmcblk1 part_ctrl.main.force_recovery_flag 0x55AA55AA
+./hboot2meta set /dev/mmcblk1 boot.main.partition_name PARTUUID=xxxx
+./hboot2meta set /dev/mmcblk1 boot.main.image[1].offset 0x3800000
+./hboot2meta set /dev/mmcblk1 part_ctrl.main.force_recovery_flag 0x55AA55AA
 ```
 
 ### 4.4 `flash`
@@ -147,17 +147,17 @@
 把一个实际镜像文件写入某个 `boot.*.image[i]` 或 `recovery.*.image[i]` 描述的盘上区域。
 
 ```bash
-./bootmeta_tool flash [-y] [--layout auto|whole-disk|raw-boot] [--base-offset N] <path> <image-target> <image-file>
+./hboot2meta flash [-y] [--layout auto|whole-disk|raw-boot] [--base-offset N] <path> <image-target> <image-file>
 ```
 
 示例：
 
 ```bash
-./bootmeta_tool flash /dev/mmcblk1 boot.main.image[0] Image
-./bootmeta_tool flash -y /dev/mmcblk1 boot.main.image[0] Image
-./bootmeta_tool flash /dev/mmcblk1 boot.back.image[1] dt.img
-./bootmeta_tool flash /dev/mmcblk1 recovery.main.image[3] initrd.img
-./bootmeta_tool flash --layout raw-boot boot_region.bin boot.main.image[2] itrustee.img
+./hboot2meta flash /dev/mmcblk1 boot.main.image[0] Image
+./hboot2meta flash -y /dev/mmcblk1 boot.main.image[0] Image
+./hboot2meta flash /dev/mmcblk1 boot.back.image[1] dt.img
+./hboot2meta flash /dev/mmcblk1 recovery.main.image[3] initrd.img
+./hboot2meta flash --layout raw-boot boot_region.bin boot.main.image[2] itrustee.img
 ```
 
 `flash` 的行为是：
@@ -325,7 +325,7 @@
 
 覆盖范围是 `Crc` 字段之前的字节。
 
-`bootmeta_tool` 现在已经按这个算法重算。
+`hboot2meta` 现在已经按这个算法重算。
 
 ---
 
@@ -515,7 +515,7 @@
 - `boot.main.image[1].offset = dt.img 在盘上的偏移`
 - `boot.main.image[2].offset = tee 在盘上的偏移`
 
-`bootmeta_tool flash` 最终也是把输入文件写到这个 `Offset` 指向的位置。所以：
+`hboot2meta flash` 最终也是把输入文件写到这个 `Offset` 指向的位置。所以：
 
 - 改 `Offset` 是在改目录指针
 - 执行 `flash` 是往目录指向的位置写内容
@@ -528,7 +528,7 @@
 
 但这个字段对分析盘内容、构建镜像、做一致性检查仍然很有价值。
 
-`bootmeta_tool flash` 在写完镜像后，会自动把对应条目的 `DataSize` 更新成这次输入文件的真实大小。
+`hboot2meta flash` 在写完镜像后，会自动把对应条目的 `DataSize` 更新成这次输入文件的真实大小。
 
 ### `ImageInfo[i].MaxSize`
 
@@ -539,7 +539,7 @@
 - 对 SSD/USB 按最大空间整块读取
 - 为越界检查、尾部清零提供上限语义
 
-`bootmeta_tool flash` 会把它当成硬上限：
+`hboot2meta flash` 会把它当成硬上限：
 
 - 输入文件大小大于 `MaxSize` 时，直接拒绝写入
 
@@ -715,51 +715,51 @@ recovery：
 ### 11.1 看当前正常启动槽位的 kernel 偏移
 
 ```bash
-./bootmeta_tool get /dev/mmcblk1 boot.main.image[0].offset
-./bootmeta_tool get /dev/mmcblk1 boot.back.image[0].offset
+./hboot2meta get /dev/mmcblk1 boot.main.image[0].offset
+./hboot2meta get /dev/mmcblk1 boot.back.image[0].offset
 ```
 
 ### 11.2 看 recovery 是否被强制打开
 
 ```bash
-./bootmeta_tool get /dev/mmcblk1 part_ctrl.main.force_recovery_flag
+./hboot2meta get /dev/mmcblk1 part_ctrl.main.force_recovery_flag
 ```
 
 ### 11.3 看 RAWDATA 升级状态
 
 ```bash
-./bootmeta_tool get /dev/mmcblk1 part_ctrl.main.upgrade[0].upgrade_status
-./bootmeta_tool get /dev/mmcblk1 part_ctrl.main.upgrade[0].upgrade_part_flag
+./hboot2meta get /dev/mmcblk1 part_ctrl.main.upgrade[0].upgrade_status
+./hboot2meta get /dev/mmcblk1 part_ctrl.main.upgrade[0].upgrade_part_flag
 ```
 
 ### 11.4 修改 boot 分区名
 
 ```bash
-./bootmeta_tool set /dev/mmcblk1 boot.main.partition_name PARTUUID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+./hboot2meta set /dev/mmcblk1 boot.main.partition_name PARTUUID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 ```
 
 ### 11.5 修改 dtb 偏移
 
 ```bash
-./bootmeta_tool set /dev/mmcblk1 boot.main.image[1].offset 0x3800000
+./hboot2meta set /dev/mmcblk1 boot.main.image[1].offset 0x3800000
 ```
 
 ### 11.6 把 kernel 写入 boot.main 的第 0 个组件
 
 ```bash
-./bootmeta_tool flash /dev/mmcblk1 boot.main.image[0] Image
+./hboot2meta flash /dev/mmcblk1 boot.main.image[0] Image
 ```
 
 ### 11.7 把 recovery initrd 写到 recovery.main 的第 3 个组件
 
 ```bash
-./bootmeta_tool flash /dev/mmcblk1 recovery.main.image[3] initrd.img
+./hboot2meta flash /dev/mmcblk1 recovery.main.image[3] initrd.img
 ```
 
 ### 11.8 在脚本里跳过确认直接写入
 
 ```bash
-./bootmeta_tool flash -y /dev/mmcblk1 boot.back.image[2] itrustee.img
+./hboot2meta flash -y /dev/mmcblk1 boot.back.image[2] itrustee.img
 ```
 
 ## 12. 风险提示

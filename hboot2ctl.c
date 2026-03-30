@@ -832,7 +832,7 @@ static void usage(FILE *stream)
             "Notes:\n"
             "  /dev/mem is used for mem/flash/sram fields; root is usually required.\n"
             "  hboot2ctl only exposes the validated hboot register map.\n"
-            "  metadata inspection and editing are handled by bootmeta_tool.\n"
+            "  metadata inspection and editing are handled by hboot2meta.\n"
             "  set asks for confirmation before writing; use -y to skip the prompt.\n");
 }
 

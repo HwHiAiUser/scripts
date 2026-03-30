@@ -1039,10 +1039,10 @@ static void usage(FILE *stream)
 {
     fprintf(stream,
             "Usage:\n"
-            "  bootmeta_tool dump [--layout auto|whole-disk|raw-boot] [--base-offset N] <path>\n"
-            "  bootmeta_tool get  [--layout auto|whole-disk|raw-boot] [--base-offset N] <path> <field>\n"
-            "  bootmeta_tool set  [--layout auto|whole-disk|raw-boot] [--base-offset N] <path> <field> <value>\n"
-            "  bootmeta_tool flash [-y] [--layout auto|whole-disk|raw-boot] [--base-offset N] <path> <image-target> <image-file>\n"
+            "  hboot2meta dump [--layout auto|whole-disk|raw-boot] [--base-offset N] <path>\n"
+            "  hboot2meta get  [--layout auto|whole-disk|raw-boot] [--base-offset N] <path> <field>\n"
+            "  hboot2meta set  [--layout auto|whole-disk|raw-boot] [--base-offset N] <path> <field> <value>\n"
+            "  hboot2meta flash [-y] [--layout auto|whole-disk|raw-boot] [--base-offset N] <path> <image-target> <image-file>\n"
             "\n"
             "Field path examples:\n"
             "  part_info.main.partition_count\n"
