@@ -33,10 +33,6 @@
 - `RECOV_IMAGE_OFFSET_MAIN = 0x120800`
 - `RECOV_IMAGE_OFFSET_BACK = 0x120C00`
 
-对应源码：
-
-- `/mnt/sda1/yihao/opiai/Ascend310B-hboot2-source/drivers/firmware/bios/HwPkg/UEFI/Products/as310b/Common/Include/Library/SdEmmcPartition.h`
-
 从布局注释看，`hboot` 认为：
 
 - `0x100000 ~ 0x100200` 是主分区信息头
@@ -267,19 +263,13 @@
 
 ## 7.1 `tagPartInfoHead`
 
-源码定义见：
-
-- `/mnt/sda1/yihao/opiai/Ascend310B-hboot2-source/drivers/firmware/bios/HwPkg/UEFI/Products/as310b/Common/Include/Library/SdEmmcPartition.h`
-
 字段如下。
 
 ### `HeadMagic`
 
 固定值 `0x55AA55AA`。
 
-`hboot` 读取主/备头时只硬性检查这个字段，见 `GetPartInfoHead()`：
-
-- `/mnt/sda1/yihao/opiai/Ascend310B-hboot2-source/drivers/firmware/bios/HwPkg/UEFI/Products/as310b/Common/Library/BootLoaderLib/BootLoaderLib.c`
+`hboot` 读取主/备头时只硬性检查这个字段
 
 如果主头魔数不对，就尝试备头。
 
@@ -326,9 +316,7 @@
 
 对 `part_info` 来说，这是有效校验字段。
 
-当前仓里的算法不是 CRC32，而是 `CRC16-CCITT(start=0)`，实现见：
-
-- `/mnt/sda1/yihao/opiai/Ascend310B-hboot2-source/drivers/firmware/bios/HwPkg/UEFI/Common/Library/CommonLib/CommonLib.c`
+当前仓里的算法不是 CRC32，而是 `CRC16-CCITT(start=0)`
 
 覆盖范围是 `Crc` 字段之前的字节。
 
