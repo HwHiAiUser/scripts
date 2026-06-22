@@ -1,0 +1,382 @@
+{
+  // 输出文件从磁盘哪个绝对偏移开始表示。
+  // hboot2 普通 SD/eMMC metadata 从 0x100000 开始，所以 dd 时通常配合 bs=1M seek=1。
+  "base_offset": "0x100000",
+
+  // 输出 raw blob 的最小大小。脚本会自动扩大到能容纳所有实际 payload。
+  // 0x220000 表示输出覆盖磁盘 0x100000..0x320000，即完整 hboot2 metadata/CRL 规划区。
+  "output_size": "0x220000",
+
+  // 自动布局参数。
+  // payload_start = auto 时，默认从 hboot2 头部规划区之后开始：
+  //   ceil(0x320000, payload_alignment)，默认即 0x400000。
+  // payload_alignment 控制所有自动分配的 image payload 起始地址对齐。
+  "layout": {
+    "payload_start": "auto",
+    "payload_alignment": "1M"
+  },
+
+  // tagPartInfoHead，主备各一份。
+  // 结构位置：
+  //   main: 0x100000..0x100200
+  //   back: 0x110000..0x110200
+  "part_info": {
+    "main": {
+      // 固定 magic，hboot2 用它判断分区信息头是否有效。
+      "head_magic": "0x55aa55aa",
+
+      // 格式版本，源码注释里 100 表示 v1.00。
+      "version": 100,
+
+      // tagPartInfoHead 结构体大小，包含 crc 字段。当前源码为 56 字节。
+      "size": 56,
+
+      // hboot2 感知的分区数量。典型值是 8：
+      // rawdata A/B, recover A/B, recover_data A/B, rootfs A/B。
+      "partition_count": 8,
+
+      // 分区存在位图：
+      // bit0 RAWDATA_A, bit1 RAWDATA_B, bit2 RECOVER_A, bit3 RECOVER_B,
+      // bit4 RECOVER_DATA_A, bit5 RECOVER_DATA_B, bit6 ROOTFS_A, bit7 ROOTFS_B。
+      "component_map": "0xff",
+
+      // Resv[8]，hboot2 源码保留字段，通常填 0。
+      "resv": [0, 0, 0, 0, 0, 0, 0, 0],
+
+      // part_info/part_ctrl 的 crc 是 CRC16-CCITT(start=0)，脚本支持 auto 自动计算。
+      "crc": "auto"
+    },
+    "back": {
+      // 备份分区信息头，通常与 main 相同，供 main 无效时回退。
+      "head_magic": "0x55aa55aa",
+      "version": 100,
+      "size": 56,
+      "partition_count": 8,
+      "component_map": "0xff",
+      "resv": [0, 0, 0, 0, 0, 0, 0, 0],
+      "crc": "auto"
+    }
+  },
+
+  // tagPartCtrlHead，主备各一份。
+  // 结构位置：
+  //   main: 0x100200..0x100400
+  //   back: 0x110200..0x110400
+  "part_ctrl": {
+    "main": {
+      "head_magic": "0x55aa55aa",
+      "version": 100,
+
+      // tagPartCtrlHead 结构体大小，包含 crc 字段。当前源码为 104 字节。
+      "size": 104,
+
+      // 0x55aa55aa 表示强制进入 recovery；正常启动填 0。
+      "force_recovery_flag": 0,
+
+      // UpgradeCtrl[4] 的有效个数。源码默认 4。
+      "upgrade_part_count": 4,
+
+      // UpgradeCtrl[0] RAWDATA/boot 区，UpgradeCtrl[1] recovery 区，
+      // UpgradeCtrl[2] recovery_data，UpgradeCtrl[3] rootfs。
+      // upgrade_status 常见值：
+      //   0xd6c55bc0 升级开始
+      //   0xd6c55bc1 指定区新版本完成
+      //   0xd6c55bc2 同步开始
+      //   0xd6c55bc3 同步完成
+      // upgrade_part_flag 常见值：
+      //   0xc11cb55b 升级主区
+      //   0x3443daad 升级备区
+      "upgrade": [
+        {"upgrade_type": 0, "upgrade_status": 0, "upgrade_part_flag": 0},
+        {"upgrade_type": 0, "upgrade_status": 0, "upgrade_part_flag": 0},
+        {"upgrade_type": 0, "upgrade_status": 0, "upgrade_part_flag": 0},
+        {"upgrade_type": 0, "upgrade_status": 0, "upgrade_part_flag": 0}
+      ],
+
+      // Resv[8]，保留字段。
+      "resv": [0, 0, 0, 0, 0, 0, 0, 0],
+
+      // part_ctrl 的 crc 由 hboot2 校验，推荐保持 auto。
+      "crc": "auto"
+    },
+    "back": {
+      // 备份控制头。正常情况下和 main 保持一致。
+      "head_magic": "0x55aa55aa",
+      "version": 100,
+      "size": 104,
+      "force_recovery_flag": 0,
+      "upgrade_part_count": 4,
+      "upgrade": [
+        {"upgrade_type": 0, "upgrade_status": 0, "upgrade_part_flag": 0},
+        {"upgrade_type": 0, "upgrade_status": 0, "upgrade_part_flag": 0},
+        {"upgrade_type": 0, "upgrade_status": 0, "upgrade_part_flag": 0},
+        {"upgrade_type": 0, "upgrade_status": 0, "upgrade_part_flag": 0}
+      ],
+      "resv": [0, 0, 0, 0, 0, 0, 0, 0],
+      "crc": "auto"
+    }
+  },
+
+  // boot.main / boot.back 是普通启动镜像目录，类型是 tagPartImageHead。
+  // 结构位置：
+  //   boot.main: 0x120000..0x120400
+  //   boot.back: 0x120400..0x120800
+  //
+  // 普通 OS 启动槽顺序来自 hboot2 的 OS_IMAGE_LOAD_TYPE：
+  //   image[0] = kernel
+  //   image[1] = dtb
+  //   image[2] = tee
+  //   image[3] = initrd
+  //
+  // image[4]..image[13] 没写时由脚本填 0。
+  "boot": {
+    "main": {
+      "head_magic": "0x55aa55aa",
+      "version": 100,
+
+      // tagPartImageHead 结构体大小，当前源码为 980 字节。
+      "size": 980,
+
+      // hboot2 会把这个名字传给 FDT bootargs 更新逻辑，用于影响 Linux rootfs 选择。
+      "partition_name": "rootfs_a",
+
+      // 普通 OS 启动最多 4 个有效镜像：kernel/dtb/tee/initrd。
+      "component_count": 4,
+
+      "image": [
+        {
+          // image[0] kernel 槽。把 U-Boot 当 hboot2 kernel payload 时，写这里。
+          "component_type": 0,
+          "component_name": "kernel",
+
+          // auto 表示由脚本自动分配磁盘绝对 offset，并写回 metadata。
+          "offset": "auto",
+
+          // auto 表示用 path 指向文件的实际大小。
+          "data_size": "auto",
+
+          // auto 表示按文件大小向上对齐后作为槽位保留大小。
+          "max_size": "auto",
+
+          // ComponentInfo.Rec[2]，保留字段。
+          "rec": [0, 0],
+
+          // 实际 payload 路径。相对路径按本配置文件所在目录解析。
+          "path": "images/boot-main-kernel.img"
+        },
+        {
+          // image[1] dtb 槽。
+          "component_type": 0,
+          "component_name": "dtb",
+          "offset": "auto",
+          "data_size": "auto",
+          "max_size": "auto",
+          "rec": [0, 0],
+          "path": "images/boot-main.dtb"
+        },
+        {
+          // image[2] tee 槽。通常应保留原厂有效 TEE，不要写普通文件。
+          "component_type": 0,
+          "component_name": "tee",
+          "offset": "auto",
+          "data_size": "auto",
+          "max_size": "auto",
+          "rec": [0, 0],
+          "path": "images/boot-main-tee.img"
+        },
+        {
+          // image[3] initrd 槽。无 initrd 时可把 path 设为 null，并把 data_size 设为 0。
+          "component_type": 0,
+          "component_name": "initrd",
+          "offset": "auto",
+          "data_size": "auto",
+          "max_size": "auto",
+          "rec": [0, 0],
+          "path": "images/boot-main-initrd.img"
+        }
+      ],
+
+      // hboot2 源码未像 part_info/part_ctrl 一样校验 boot/recovery 的尾部 crc。
+      // 脚本默认保持你给的值；常用填 0。
+      "crc": 0
+    },
+    "back": {
+      // 备份启动镜像目录。字段含义与 boot.main 完全相同。
+      "head_magic": "0x55aa55aa",
+      "version": 100,
+      "size": 980,
+      "partition_name": "rootfs_b",
+      "component_count": 4,
+      "image": [
+        {
+          // boot.back.image[0] kernel 备份槽。
+          "component_type": 0,
+          "component_name": "kernel",
+          "offset": "auto",
+          "data_size": "auto",
+          "max_size": "auto",
+          "rec": [0, 0],
+          "path": "images/boot-back-kernel.img"
+        },
+        {
+          // boot.back.image[1] dtb 备份槽。
+          "component_type": 0,
+          "component_name": "dtb",
+          "offset": "auto",
+          "data_size": "auto",
+          "max_size": "auto",
+          "rec": [0, 0],
+          "path": "images/boot-back.dtb"
+        },
+        {
+          // boot.back.image[2] tee 备份槽。
+          "component_type": 0,
+          "component_name": "tee",
+          "offset": "auto",
+          "data_size": "auto",
+          "max_size": "auto",
+          "rec": [0, 0],
+          "path": "images/boot-back-tee.img"
+        },
+        {
+          // boot.back.image[3] initrd 备份槽。
+          "component_type": 0,
+          "component_name": "initrd",
+          "offset": "auto",
+          "data_size": "auto",
+          "max_size": "auto",
+          "rec": [0, 0],
+          "path": "images/boot-back-initrd.img"
+        }
+      ],
+      "crc": 0
+    }
+  },
+
+  // recovery.main / recovery.back 是 recovery 启动镜像目录，也是 tagPartImageHead。
+  // 结构位置：
+  //   recovery.main: 0x120800..0x120c00
+  //   recovery.back: 0x120c00..0x121000
+  //
+  // hboot2 recovery enum 名称是：
+  //   image[0] = rec dtb
+  //   image[1] = rec tee
+  //   image[2] = rec kernel
+  //   image[3] = rec filesystem/initrd
+  "recovery": {
+    "main": {
+      "head_magic": "0x55aa55aa",
+      "version": 100,
+      "size": 980,
+      "partition_name": "recovery_a",
+      "component_count": 4,
+      "image": [
+        {
+          // recovery.main.image[0] recovery dtb。
+          "component_type": 0,
+          "component_name": "rec-dtb",
+          "offset": "auto",
+          "data_size": "auto",
+          "max_size": "auto",
+          "rec": [0, 0],
+          "path": "images/recovery-main.dtb"
+        },
+        {
+          // recovery.main.image[1] recovery tee。
+          "component_type": 0,
+          "component_name": "rec-tee",
+          "offset": "auto",
+          "data_size": "auto",
+          "max_size": "auto",
+          "rec": [0, 0],
+          "path": "images/recovery-main-tee.img"
+        },
+        {
+          // recovery.main.image[2] recovery kernel。
+          "component_type": 0,
+          "component_name": "rec-kernel",
+          "offset": "auto",
+          "data_size": "auto",
+          "max_size": "auto",
+          "rec": [0, 0],
+          "path": "images/recovery-main-kernel.img"
+        },
+        {
+          // recovery.main.image[3] recovery filesystem/initrd。
+          "component_type": 0,
+          "component_name": "rec-fs",
+          "offset": "auto",
+          "data_size": "auto",
+          "max_size": "auto",
+          "rec": [0, 0],
+          "path": "images/recovery-main-rootfs.img"
+        }
+      ],
+      "crc": 0
+    },
+    "back": {
+      // recovery 备份目录。
+      "head_magic": "0x55aa55aa",
+      "version": 100,
+      "size": 980,
+      "partition_name": "recovery_b",
+      "component_count": 4,
+      "image": [
+        {
+          // recovery.back.image[0] recovery dtb 备份槽。
+          "component_type": 0,
+          "component_name": "rec-dtb",
+          "offset": "auto",
+          "data_size": "auto",
+          "max_size": "auto",
+          "rec": [0, 0],
+          "path": "images/recovery-back.dtb"
+        },
+        {
+          // recovery.back.image[1] recovery tee 备份槽。
+          "component_type": 0,
+          "component_name": "rec-tee",
+          "offset": "auto",
+          "data_size": "auto",
+          "max_size": "auto",
+          "rec": [0, 0],
+          "path": "images/recovery-back-tee.img"
+        },
+        {
+          // recovery.back.image[2] recovery kernel 备份槽。
+          "component_type": 0,
+          "component_name": "rec-kernel",
+          "offset": "auto",
+          "data_size": "auto",
+          "max_size": "auto",
+          "rec": [0, 0],
+          "path": "images/recovery-back-kernel.img"
+        },
+        {
+          // recovery.back.image[3] recovery filesystem/initrd 备份槽。
+          "component_type": 0,
+          "component_name": "rec-fs",
+          "offset": "auto",
+          "data_size": "auto",
+          "max_size": "auto",
+          "rec": [0, 0],
+          "path": "images/recovery-back-rootfs.img"
+        }
+      ],
+      "crc": 0
+    }
+  },
+
+  // 额外 payload 列表，不属于 tagPartImageHead 的 image[n]。
+  // CRL 在源码规划中位于磁盘 0x220000..0x2a0000，大小 512 KiB。
+  // 对 name = "crl" 的额外 payload，offset/max_size 为 auto 时会使用这个固定位置和大小。
+  // 如果不需要生成 CRL，可以把 path 改为实际文件，或删除 payloads 数组里的这个对象。
+  "payloads": [
+    {
+      "name": "crl",
+      "offset": "auto",
+      "max_size": "auto",
+      "path": "images/crl.bin"
+    }
+  ]
+}
