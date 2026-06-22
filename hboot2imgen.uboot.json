@@ -18,6 +18,12 @@
   // image[1] uses the dt.img bundle from:
   //   https://github.com/HwHiAiUser/kernel-build-opiai/releases/download/6.18.36/dt.img
   //
+  // In this U-Boot-as-kernel-payload setup, dt.img is mainly here to satisfy
+  // hboot2's normal image loading/checking flow. It is not expected to be the
+  // effective device tree used by Linux after U-Boot takes control; the final
+  // Linux DTB normally comes from U-Boot's own boot flow, such as extlinux,
+  // boot.scr, or U-Boot environment commands.
+  //
   // U-Boot can be built from:
   //   https://github.com/HwHiAiUser/u-boot
   "base_offset": "0x100000",
@@ -105,6 +111,8 @@
         },
         {
           // image[1] = dtb slot; contains dt.img.
+          // This dt.img has no practical Linux DTB role after U-Boot starts;
+          // it only keeps hboot2's expected image[1] slot valid.
           "component_type": 1,
           "component_name": "dtb",
           "offset": "auto",
@@ -145,6 +153,8 @@
         },
         {
           // image[1] = dtb backup slot; contains dt.img.
+          // This dt.img has no practical Linux DTB role after U-Boot starts;
+          // it only keeps hboot2's expected image[1] slot valid.
           "component_type": 1,
           "component_name": "dtb",
           "offset": "auto",
