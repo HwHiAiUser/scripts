@@ -1,0 +1,197 @@
+{
+  // Minimal hboot2 image set for booting U-Boot as the hboot2 kernel payload.
+  //
+  // Generate:
+  //   ./hboot2imgen.py hboot2imgen.uboot.json hboot2-uboot.raw
+  //
+  // Flash the generated raw blob to the disk region starting at 1MiB:
+  //   sudo dd if=hboot2-uboot.raw of=/dev/sdX bs=1M seek=1 conv=fsync,notrunc
+  //
+  // This config writes only:
+  //   boot.main.image[0] = U-Boot
+  //   boot.main.image[1] = dt.img
+  //   boot.main.image[2] = TEE
+  //   boot.back.image[0] = U-Boot
+  //   boot.back.image[1] = dt.img
+  //   boot.back.image[2] = TEE
+  //
+  // image[1] uses the dt.img bundle from:
+  //   https://github.com/HwHiAiUser/kernel-build-opiai/releases/download/6.18.36/dt.img
+  //
+  // U-Boot can be built from:
+  //   https://github.com/HwHiAiUser/u-boot
+  "base_offset": "0x100000",
+  "output_size": "auto",
+
+  // Auto-allocate payload offsets after the hboot2 metadata/CRL area.
+  "layout": {
+    "payload_start": "auto",
+    "payload_alignment": "1M"
+  },
+
+  // Only RAWDATA A/B are advertised. Recovery/rootfs partitions are not used by
+  // this U-Boot-first boot flow.
+  "part_info": {
+    "main": {
+      "head_magic": "0x55aa55aa",
+      "version": 100,
+      "size": 56,
+      "partition_count": 2,
+      "component_map": "0x3",
+      "resv": [0, 0, 0, 0, 0, 0, 0, 0],
+      "crc": "auto"
+    },
+    "back": {
+      "head_magic": "0x55aa55aa",
+      "version": 100,
+      "size": 56,
+      "partition_count": 2,
+      "component_map": "0x3",
+      "resv": [0, 0, 0, 0, 0, 0, 0, 0],
+      "crc": "auto"
+    }
+  },
+
+  "part_ctrl": {
+    "main": {
+      "head_magic": "0x55aa55aa",
+      "version": 100,
+      "size": 104,
+      "force_recovery_flag": 0,
+      "upgrade_part_count": 4,
+      "upgrade": [
+        {"upgrade_type": 0, "upgrade_status": 0, "upgrade_part_flag": 0},
+        {"upgrade_type": 0, "upgrade_status": 0, "upgrade_part_flag": 0},
+        {"upgrade_type": 0, "upgrade_status": 0, "upgrade_part_flag": 0},
+        {"upgrade_type": 0, "upgrade_status": 0, "upgrade_part_flag": 0}
+      ],
+      "resv": [0, 0, 0, 0, 0, 0, 0, 0],
+      "crc": "auto"
+    },
+    "back": {
+      "head_magic": "0x55aa55aa",
+      "version": 100,
+      "size": 104,
+      "force_recovery_flag": 0,
+      "upgrade_part_count": 4,
+      "upgrade": [
+        {"upgrade_type": 0, "upgrade_status": 0, "upgrade_part_flag": 0},
+        {"upgrade_type": 0, "upgrade_status": 0, "upgrade_part_flag": 0},
+        {"upgrade_type": 0, "upgrade_status": 0, "upgrade_part_flag": 0},
+        {"upgrade_type": 0, "upgrade_status": 0, "upgrade_part_flag": 0}
+      ],
+      "resv": [0, 0, 0, 0, 0, 0, 0, 0],
+      "crc": "auto"
+    }
+  },
+
+  "boot": {
+    "main": {
+      "head_magic": "0x55aa55aa",
+      "version": 100,
+      "size": 980,
+      "partition_name": "",
+      "component_count": 3,
+      "image": [
+        {
+          // image[0] = kernel slot; contains U-Boot.
+          "component_type": 0,
+          "component_name": "uboot",
+          "offset": "auto",
+          "data_size": "auto",
+          "max_size": "auto",
+          "rec": [0, 0],
+          "path": "../u-boot/Image.hboot2"
+        },
+        {
+          // image[1] = dtb slot; contains dt.img.
+          "component_type": 1,
+          "component_name": "dtb",
+          "offset": "auto",
+          "data_size": "auto",
+          "max_size": "auto",
+          "rec": [0, 0],
+          "path": "resources/dt.img"
+        },
+        {
+          // image[2] = tee slot; contains the extracted valid TEE image.
+          "component_type": 2,
+          "component_name": "tee",
+          "offset": "auto",
+          "data_size": "auto",
+          "max_size": "auto",
+          "rec": [0, 0],
+          "path": "resources/tee.img"
+        }
+      ],
+      "crc": 0
+    },
+    "back": {
+      "head_magic": "0x55aa55aa",
+      "version": 100,
+      "size": 980,
+      "partition_name": "",
+      "component_count": 3,
+      "image": [
+        {
+          // image[0] = kernel backup slot; contains the same U-Boot image.
+          "component_type": 0,
+          "component_name": "uboot",
+          "offset": "auto",
+          "data_size": "auto",
+          "max_size": "auto",
+          "rec": [0, 0],
+          "path": "../u-boot/Image.hboot2"
+        },
+        {
+          // image[1] = dtb backup slot; contains dt.img.
+          "component_type": 1,
+          "component_name": "dtb",
+          "offset": "auto",
+          "data_size": "auto",
+          "max_size": "auto",
+          "rec": [0, 0],
+          "path": "resources/dt.img"
+        },
+        {
+          // image[2] = tee backup slot.
+          "component_type": 2,
+          "component_name": "tee",
+          "offset": "auto",
+          "data_size": "auto",
+          "max_size": "auto",
+          "rec": [0, 0],
+          "path": "resources/tee.img"
+        }
+      ],
+      "crc": 0
+    }
+  },
+
+  // Keep recovery metadata heads valid but empty. This avoids random data in
+  // the recovery directory area while ensuring normal BOOT_OS_IMG startup does
+  // not write or depend on recovery payloads.
+  "recovery": {
+    "main": {
+      "head_magic": "0x55aa55aa",
+      "version": 100,
+      "size": 980,
+      "partition_name": "",
+      "component_count": 0,
+      "image": [],
+      "crc": 0
+    },
+    "back": {
+      "head_magic": "0x55aa55aa",
+      "version": 100,
+      "size": 980,
+      "partition_name": "",
+      "component_count": 0,
+      "image": [],
+      "crc": 0
+    }
+  },
+
+  // No CRL payload is included. hboot2 will read zeros from the fixed CRL area.
+  "payloads": []
+}
